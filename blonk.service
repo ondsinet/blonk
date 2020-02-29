@@ -1,7 +1,7 @@
 # blonk.service -- version: "28-Feb-2020"
 # See https://github.com/ondsinet/chip/tree/master/Programs/blonk
 [Unit]
-Description=Monitors and Reports sensors on the C.H.I.P. such asbattery, temp etc
+Description=Monitors and Reports sensors on the C.H.I.P. such as battery, temp etc
 After=default.target
 
 [Service]
