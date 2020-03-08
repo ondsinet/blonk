@@ -27,8 +27,15 @@ CHG_VOLT=
 CHG_CURR=
 
 TEMPERATURE_VALUE=
+TEMPERATURE_PRINT=
+
 
 UPTIME_VALUE=
+
+IP_CURRENT=
+IP_LAST=
+IP_DOMAIN=
+
 
 RESET_PRESSED=
 RESET_GPIO_PRESSED=
@@ -36,7 +43,8 @@ RESET_GPIO_PRESSED=
 BLINK_GPIO_STATE=0
 
 BLINK_FREQUENCY=1			# Period of the blinking in second
-SENSOR_FREQUENCY=5
+BLINK_FREQUENCY_HALF=
+SENSOR_READ_FREQUENCY=5
 FREQ_DIV=2
 
 REPORT_TXT=
@@ -61,20 +69,21 @@ read_config(){
 	BLINK_ENABLED= 
 	BLINK_GPIO=
 
-	RESET_GPIO_SET=
-	LINK_GPIO_SET=
-	BATTERY_WARN_GPIO_SET=
-	TEMPERATURE_WARN_GPIO_SET=
 
-	if [ -f /home/ondsi/blonk.cfg ]; then :
-		source /home/ondsi/blonk.cfg
+	IP_CHANGE_CHECK=				# Monitor the external ip of the chip. Might be slow on some connections
+	IP_CHANGE_WARN=					# Warn if ip changes.
+
+	IP_COMPARE_DOMAIN=				# Use a domain directing to your ip. Will use machine's recorded last ip if commented.
+	IP_UPDATE_DDNS=				# Path to a program to update your domain if your ip is changed
+
+
+	if [ -f /usr/local/etc/blonk.cfg ]; then :
+		source /usr/local/etc/blonk.cfg
 	else :
 		MON_RESET=1
 		BLINK_STATUS=1
 	fi
 }
-
-
 
 
 
@@ -263,10 +272,12 @@ read_AXP(){		#reads values from the power ic
 	#REG=`printf "%d" "$REG"`
 	#IPSOUT=`echo "$REG*0.0014"|bc`
 
-	# Temperature
+	# Temperature	
 	REG=`i2cget -y -f 0 0x34 0x5E w|awk '{print "0x"substr($0,5,2)substr($0,4,1)}'`
 	REG=`printf "%d" "$REG"`
-	TEMPERATURE_VALUE=`echo "($REG*0.1)-144.7"|bc`
+	
+	TEMPERATURE_PRINT=`echo "($REG*0.1)-144.7"|bc`
+	TEMPERATURE_VALUE=`echo "($REG)-1447"|bc`
 	#echo "Temperature:	"$THERM"°C (I've seen as high as 65°C)"
 		
 }
@@ -291,12 +302,25 @@ read_stats(){		#reads cpu stats
 
 	#CPU= `cat <(grep 'cpu ' /proc/stat) <(sleep 1 && grep 'cpu ' /proc/stat) | awk -v RS="" '{print ($13-$2+$15-$4)*100/($13-$2+$15-$4+$16-$5)}'`
 	#echo "${CPU}"
+
+
 }
 
 read_gpio(){
 	echo
 }
 
+
+read_ip(){
+	IP_CURRENT=`host myip.opendns.com resolver1.opendns.com | awk '/has address/ { print $4 }'`
+	#echo $IP_CURRENT
+
+	if [ -n "$IP_COMPARE_DOMAIN" ]; then :
+		IP_DOMAIN=`host $IP_COMPARE_DOMAIN resolver1.opendns.com | awk '/has address/ { print $4 }'`
+		IP_LAST=$IP_DOMAIN
+		#echo $IP_DOMAIN
+	fi
+}
 
 compile_report(){
 	txt_PWR="Not Connected"
@@ -321,7 +345,9 @@ compile_report(){
 
 read -r -d '' REPORT_TXT << EOM
 $UPTIME_VALUE
-Temp:	$TEMPERATURE_VALUE°C
+ip:	$IP_CURRENT
+
+Temp:	$TEMPERATURE_PRINT°C
 Batt:	$BATTERY_VALUE%	$BATTERY_STATE
 Power Supply: $txt_PWR
 
@@ -332,10 +358,84 @@ EOM
 
 }
 
+ext_update_ddns(){
+	if [ -n "$IP_UPDATE_DDNS" ]; then :
+		echo "update dns"
+		update_ddns
+	fi
+}
+
+
+
+WARN_TEMP=0
+WARN_BATT=0
+WARN_POWR=0
+WARN_IP=0
+
+WARN_TEMP_DONE=0
+WARN_BATT_DONE=0
+WARN_POWR_DONE=0
+WARN_IP_DONE=0
 
 compile_warnings(){
-echo 
+
+	#battery low
+	if [ $WARN_BATT == 0 ] && (( BATTERY_VALUE < BATTERY_WARN_VALUE )); then
+		WARN_BATT=1
+		echo "warn batt"
+	elif [ $WARN_BATT == 1 ] && (( BATTERY_VALUE > BATTERY_WARN_VALUE + 2 )); then
+		WARN_BATT=0
+		echo "ok batt"
+	fi
+	# echo $BATTERY_WARN_VALUE
+	# echo $BATTERY_VALUE
+	# echo $WARN_BATT
+
+
+	#power disconnected
+	if [ $WARN_POWR == 0 ] && [ $POWER_SOURCE == 0 ];then 
+		WARN_POWR=1
+		echo "warn pwr"
+	elif [ $WARN_POWR == 1 ] && [ $POWER_SOURCE == 1 ];then
+		WARN_POWR=0
+		echo "ok pwr"
+	fi
+	# echo $WARN_POWR
+
+
+	#too hot
+	if [ $WARN_TEMP == 0 ] && (( TEMPERATURE_VALUE > TEMPERATURE_WARN_VALUE )); then
+		WARN_TEMP=1
+		echo "warn TEMP"
+	elif [ $WARN_TEMP == 1 ] && (( TEMPERATURE_VALUE < TEMPERATURE_WARN_VALUE - 20 )); then
+		WARN_TEMP=0
+		echo "ok TEMP"
+	fi
+	# echo $TEMPERATURE_WARN_VALUE
+	# echo $TEMPERATURE_VALUE
+	# echo $WARN_TEMP
+	
+	
+	#no internet
+	
 }
+
+manage_ip(){
+	#changed ip
+	WARN_IP=0
+	if [[ "$IP_CURRENT" != "$IP_LAST" ]]; then
+		WARN_IP=1
+		IP_LAST=$IP_CURRENT
+		echo "changed ip"
+		echo "last ip "$IP_LAST
+		echo $IP_CURRENT
+		ext_update_ddns
+	fi
+
+	#echo $WARN_IP
+	#ext_update_ddns
+}
+
 handle_warnings(){
 echo 
 }
@@ -380,11 +480,15 @@ fi
 	read_config
 	read_AXP
 	read_stats
-	read_gpio
+	#read_gpio
+	read_ip
 
 	compile_report
 	compile_warnings 
 
+
+	BLINK_FREQUENCY_HALF=$((${BLINK_FREQUENCY}00/2))
+	BLINK_FREQUENCY_HALF=$(echo "${BLINK_FREQUENCY_HALF:0:-2}.${BLINK_FREQUENCY_HALF: -2}")
 #########################################
 
 	if [ $PRINT ]; then
@@ -404,23 +508,41 @@ fi
 	trap "blonk_stop" 1 2 3 15	
 #########################################
 
-
-
+	LAST_TIME_SENSORS=`date +%s`
+	LAST_TIME_IP=`date +%s`
+	
 	if [ $SERVICE ]; then
 		while true; do :
-			read_AXP
-			read_stats
-			#read_gpio			
-			#compile_warnings
-			#handle_warnings
-			
-			
-			for (( c=0; c<=$SENSOR_FREQUENCY; c+=$BLINK_FREQUENCY )); do :
-			#for i in {0..$BLINK_FREQUENCY..$SENSOR_FREQUENCY}; do :
+		
+			TIME=`date +%s`
+
+			#echo $TIME
+			#echo $LAST_TIME_SENSORS
+			if (( $TIME > $LAST_TIME_SENSORS )); then	#read and handle sensors
 				blink
-				RESULT=$((${BLINK_FREQUENCY}00/$FREQ_DIV))
-				RESULT=$(echo "${RESULT:0:-2}.${RESULT: -2}")
-				sleep $RESULT
-			done
+				#echo "reading sensors"
+				read_AXP
+				read_stats
+				#read_gpio			
+				compile_warnings
+				#handle_warnings
+				LAST_TIME_SENSORS=$((TIME+SENSOR_READ_FREQUENCY))
+				#echo $LAST_TIME_SENSORS
+				blink
+				sleep 0.1
+			fi
+			
+			if (( $TIME > $LAST_TIME_IP )); then		#read and handle ip change
+				#echo "reading IP"
+				read_ip
+				manage_ip
+				LAST_TIME_IP=$((TIME+IP_READ_FREQUENCY))
+				#echo $LAST_TIME_IP
+			fi			
+
+				blink
+				sleep $BLINK_FREQUENCY_HALF
+				blink
+				sleep $BLINK_FREQUENCY_HALF
 		done
 	fi

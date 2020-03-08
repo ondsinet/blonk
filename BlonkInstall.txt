@@ -1,0 +1,14 @@
+sudo wget -O /usr/local/bin/gpio.sh http://fordsfords.github.io/gpio_sh/gpio.sh
+ 
+sudo wget -O /usr/local/bin/blonk.sh https://github.com/ondsinet/blonk/raw/master/blonk.sh
+sudo chmod +x /usr/local/bin/blonk.sh
+
+sudo wget -O /etc/systemd/system/blonk.service https://github.com/ondsinet/blonk/raw/master/blonk.service
+sudo systemctl enable /etc/systemd/system/blonk.service
+ 
+sudo wget -O /usr/local/etc/blonk.cfg https://github.com/ondsinet/blonk/raw/master/blonk.cfg
+  
+sudo service blonk start
+
+systemctl status blonk
+sudo service blonk stop

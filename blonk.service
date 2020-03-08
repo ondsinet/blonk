@@ -6,7 +6,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=/home/ondsi/blonk.sh
+ExecStart=/usr/local/bin/blonk.sh
 
 [Install]
 WantedBy=default.target
